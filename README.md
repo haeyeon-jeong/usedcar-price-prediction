@@ -25,7 +25,7 @@ This project applies machine learning techniques to analyze used car data and bu
 ## Dataset Description
 
 The dataset contains detailed information about used cars, including specifications and usage history.
-https://www.kaggle.com/datasets/sukhmandeepsinghbrar/car-price-prediction-dataset/data<img width="468" height="50" alt="image" src="https://github.com/user-attachments/assets/09b4b024-64aa-418d-93fe-04c949223462" />
+https://www.kaggle.com/datasets/sukhmandeepsinghbrar/car-price-prediction-dataset/data
 
 **Key Features:**
 - Car Name  
