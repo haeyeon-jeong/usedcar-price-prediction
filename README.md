@@ -112,7 +112,7 @@ This project demonstrates how machine learning can effectively predict used car 
 
 ## How to Run
 
-1. Open the `.Rmd` file in RStudio  
+1. Open the `.Rmd` file in RStudio with the dataset(cardekho.csv)
 2. Install required libraries:
 
 ```r
