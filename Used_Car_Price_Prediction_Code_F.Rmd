@@ -1,0 +1,1308 @@
+---
+title: "Team_Wizards_Final_Used_Car_Price"
+author: "Team 4 Wizards, GWU"
+members: "Aniruddh Rajagopal, Dhatrija Sukasi, Haeyeon Jeong, Likhitha Reddy Bairu"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    number_sections: false
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+
+```{r init, include=FALSE}
+# some of common options (and the defaults) are: 
+# include=T, eval=T, echo=T, results='hide'/'asis'/'markup',..., collapse=F, warning=T, message=T, error=T, cache=T, fig.width=6, fig.height=4, fig.dim=c(6,4) #inches, fig.align='left'/'center','right', 
+#library(ezids) # this does not work for recent R verions
+# Install and load necessary libraries
+# install.packages("dplyr")
+# Install ggplot2 if not installed
+# install.packages("ggplot2")
+library(dplyr)
+library(ggplot2)
+library(scales)  # For formatting axis labels with commas
+library(corrplot) # for correaltion
+library(caret) #Used for partitioning data and other machine learning utilities.
+library(car) # checking VIF
+library(randomForest) # for randomforest
+library(leaps) # for subsetting features
+# Install PRROC package if not already installed
+# install.packages("PRROC")
+library(PRROC)
+library(pROC)
+library(reshape2)
+
+#rpart and rpart.plot are used for creating and visualizing decision trees.
+library(rpart) #Provides functions for decision tree modeling.
+library(rpart.plot) #Visualizes decision trees.
+library(caret) #Useful for splitting data and training predictive models.
+library(knitr)
+# knitr::opts_chunk$set(warning = F, results = "markup", message = F)
+knitr::opts_chunk$set(warning = F, results = "hide", message = F)
+# options(scientific=T, digits = 3) 
+options(scipen=9, digits = 3) 
+# ‘scipen’: integer. A penalty to be applied when deciding to print numeric values in fixed or exponential notation.  Positive values bias towards fixed and negative towards scientific notation: fixed notation will be preferred unless it is more than ‘scipen’ digits wider.
+# use scipen=999 to prevent scientific notation at all times
+```
+
+# 1. SUMMARY OF DATA
+
+## 1) Dataset
+Our dataset is sourced from kaggle.
+```{r data loading}
+# To load an csv file
+getwd()
+usedcar <- read.csv("cardekho.csv")
+```
+```{r dataset, results="markup" }
+str(usedcar)
+summary(usedcar)
+
+```
+
+The dataset has 8128 obs. of  12 variables.
+
+
+## 2) Data Cleaning (Preprocessing)
+
+### Step 1) Checking Missing Values
+We first start with checking missing values.
+
+```{r missingvalue, results="markup" }
+# Check for missing values
+cat("Rows with missing values:",sum(is.na(usedcar)),"\n")
+
+# Check how many missing values are in each column
+print("Number of missing values in each column")
+colSums(is.na(usedcar))  
+
+# Drop rows with missing values
+usedcar_clean <- usedcar[complete.cases(usedcar), ]
+# Verify the structure of the cleaned dataset
+str(usedcar_clean)
+
+
+# Verify that there are no missing values left
+cat("Rows with missing values after removing:", sum(is.na(usedcar_clean)),"\n")
+
+# Check for summary statistics to ensure the data looks okay
+summary(usedcar_clean)
+```
+
+There were 830 rows with missing values. We decided to remove the rows. After removing the rows with missing values, there are 7906 observations left.
+
+
+### Step 2) Rename the Column Name
+
+```{r col_name, results="markup" }
+# Rename the column 'mileage.km.ltr.kg.' to 'mileage'
+colnames(usedcar_clean)[colnames(usedcar_clean) == "mileage.km.ltr.kg."] <- "mileage"
+
+# Verify the column name change
+colnames(usedcar_clean)
+```
+
+We renamed the column `mileage.km.ltr.kg.` to `mileage`.
+
+
+### Step 3) Create New Columns
+
+#### By Converting Units
+
+Additionally, we found that some values better to be converted for better understanding.
+
+For example, we found that `selling_price` is in `INR`, so we decided to convert the value into `USD` and save it as `price_in_usd`.
+In addition, we also decided to convert km_driven unit from `km` to `miles` and save it as `miles_driven`.
+
+```{r convert, results="markup" }
+# Define the exchange rate from INR to USD (rate on Dec 2, 2024)
+exchange_rate_inr_to_usd <- 1 / 84.7025  # 1 USD = 84.7025 INR
+
+# Convert selling_price (INR) to price_in_usd
+usedcar_clean$price_in_usd <- usedcar_clean$selling_price * exchange_rate_inr_to_usd
+
+# Convert km_driven (km) to miles
+usedcar_clean$miles_driven <- usedcar_clean$km_driven * 0.621371
+
+# Check the new dataframe with the added columns
+head(usedcar_clean[, c("selling_price", "price_in_usd", "km_driven", "miles_driven")])
+```
+
+#### By Calculation
+
+Create additional features that could be useful for modeling. And later, we mostly used car_year instead of year for modeling part.
+
+`Age of the car`: Subtract the car’s manufacturing year from the current year.
+
+```{r new_carage, results="markup" }
+# Create a new column 'car_age'
+usedcar_clean$car_age <- 2024 - usedcar_clean$year
+
+str(usedcar_clean)
+```
+
+
+### Step 4) Drop Unnecessary Columns
+We removed `selling_price`, `km_driven`, because we created `price_in_usd`, `mile_driven`and we will used them instead.
+```{r drop cols, results="markup" }
+# Drop selling_price and km_driven columns
+usedcar_clean <- usedcar_clean[, !names(usedcar_clean) %in% c("selling_price", "km_driven")]
+
+# Verify by checking the first few rows of the updated dataframe
+cat("First few row of the data after Data Preprocessing")
+head(usedcar_clean)
+
+```
+
+
+# 2. EDA and Statistical Testing
+
+Before EDA, we first convert Categorical Variables to Factors
+```{r cat_variables, results="markup" }
+# Convert categorical variables to factors
+usedcar_clean$fuel <- factor(usedcar_clean$fuel)
+usedcar_clean$seller_type <- factor(usedcar_clean$seller_type)
+usedcar_clean$transmission <- factor(usedcar_clean$transmission)
+usedcar_clean$owner <- factor(usedcar_clean$owner)
+usedcar_clean$seats <- factor(usedcar_clean$seats)
+
+str(usedcar_clean)
+```
+
+We changed categorical variables to factors. We changed `fuel, seller_type, transmission, owner, seats` to factors.
+
+
+## 1) Visualizing Distributions of Key Variables
+
+### A) Distribution of Each Variables 
+```{r eda1, results="markup" }
+
+# Distribution of Car Year
+ggplot(usedcar_clean, aes(x = year)) +
+  geom_histogram(bins = 50, fill = "lightgreen", color = "black") +
+  theme_minimal() +
+  ggtitle("Distribution of Car Year") +
+  xlab("Car Year") +
+  ylab("Count of Cars") +  
+  scale_x_continuous(breaks = seq(min(usedcar_clean$year), max(usedcar_clean$year), by = 2))
+
+# Distribution of Car Age
+#bins = 20: The age range is divided into 20 intervals.
+#fill = "blue", color = "black"
+ggplot(usedcar_clean, aes(x = car_age)) + 
+  geom_histogram(bins = 20, fill = "blue", color = "black", alpha = 0.7) +
+  labs(title = "Car Age Distribution", x = "Car Age", y = "Frequency")
+#The histogram reveals the concentration of car ages. For example:
+#A high frequency of cars may be concentrated around certain ages (e.g., 5-10 years old).
+#Fewer cars might be very new or extremely old.
+
+# Distribution of Price in USD
+ggplot(usedcar_clean, aes(x = price_in_usd)) +
+  geom_histogram(bins = 20, fill = "skyblue", color = "black") +
+  scale_x_continuous(labels = comma) +  # Format x-axis with commas
+  theme_minimal() +
+  ggtitle("Distribution of Price (USD)") +
+  xlab("Price (in USD)") +  
+  ylab("Count of Cars")  
+#Peaks indicate the most common price ranges (e.g., $5,000-$10,000).
+#Outliers, such as luxury cars with very high prices, can be identified.
+
+
+# Distribution of Miles Driven
+ggplot(usedcar_clean, aes(x = miles_driven)) +
+  geom_histogram(bins = 30, fill = "lightgreen", color = "black") +
+  scale_x_continuous(labels = comma) +  
+  theme_minimal() +
+  ggtitle("Distribution of Miles Driven") +
+  xlab("Miles Driven") +  
+  ylab("Count of Cars")  
+
+
+# Distribution of Mileage
+ggplot(usedcar_clean, aes(x = mileage)) +
+  geom_histogram(bins = 30, fill = "lightcoral", color = "black") +
+  theme_minimal() +
+  ggtitle("Distribution of Mileage (km per liter)") +
+  xlab("Mileage (km per liter)") +
+  ylab("Count of Cars") 
+
+# Count plot of Fuel Types
+ggplot(usedcar_clean, aes(x = fuel, fill = fuel)) +
+  geom_bar() +
+  theme_minimal() +
+  ggtitle("Distribution of Fuel Types") +
+  xlab("Fuel Type") +
+  scale_fill_brewer(palette = "Set2") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Count plot of Seller Types
+ggplot(usedcar_clean, aes(x = seller_type, fill = seller_type)) +
+  geom_bar() +
+  theme_minimal() +
+  ggtitle("Distribution of Seller Types") +
+  xlab("Seller Type") +
+  scale_fill_brewer(palette = "Set3") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Plot Pie Chart for seller type
+seller_summary <- usedcar_clean %>%
+  count(seller_type) %>%
+  mutate(percentage = n / sum(n) * 100)
+
+
+ggplot(seller_summary, aes(x = "", y = percentage, fill = seller_type)) +
+  geom_bar(stat = "identity", width = 1, color = "white") +
+  coord_polar(theta = "y") +
+  theme_void() +
+  ggtitle("Proportion of Seller Types") +
+  scale_fill_brewer(palette = "Set3") +
+  theme(legend.title = element_blank())
+
+
+# Count plot of Transmission Types
+ggplot(usedcar_clean, aes(x = transmission, fill = transmission)) +
+  geom_bar() +
+  theme_minimal() +
+  ggtitle("Distribution of Transmission Types") +
+  xlab("Transmission Type") +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Count plot of Ownership Types
+ggplot(usedcar_clean, aes(x = owner, fill = owner)) +
+  geom_bar() +
+  theme_minimal() +
+  ggtitle("Distribution of Ownership Types") +
+  xlab("Owner Type") +
+  scale_fill_brewer(palette = "Set1") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Histogram for Engine Capacity
+ggplot(usedcar_clean, aes(x = engine)) +
+  geom_histogram(bins = 30, fill = "lightblue", color = "black") +
+  theme_minimal() +
+  ggtitle("Distribution of Engine Capacity") +
+  xlab("Engine Capacity (cc)") +
+  ylab("Frequency") +
+  scale_x_continuous(labels = comma)
+
+# Histogram for Maximum Power
+ggplot(usedcar_clean, aes(x = max_power)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black") +
+  theme_minimal() +
+  ggtitle("Distribution of Maximum Power") +
+  xlab("Maximum Power (bhp)") +
+  ylab("Frequency") +
+  scale_y_continuous(labels = comma)
+
+# Bar plot for Number of Seats
+ggplot(usedcar_clean, aes(x = factor(seats), fill = factor(seats))) +
+  geom_bar() +
+  theme_minimal() +
+  ggtitle("Distribution of Number of Seats") +
+  xlab("Number of Seats") +
+  ylab("Count") +
+  scale_fill_brewer(palette = "Set3") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+### B) Bivariate Analysis
+We checked relationships between variables in our data using visualization.
+
+**Relationships between Price and other variables**
+```{r eda2_price, results="markup" }
+# Line Graph: Average Price (USD) vs Car Year
+ggplot(usedcar_clean, aes(x = year, y = price_in_usd)) +
+  geom_line(stat = "summary", fun = "mean", color = "blue", size = 1) +
+  theme_minimal() +
+  ggtitle("Average Price (USD) vs Car Year") +
+  xlab("Car Year") +
+  ylab("Average Price (USD)") +
+  scale_y_continuous(labels = scales::comma)
+
+
+# Line Graph: Average Price (USD) vs Car Age
+ggplot(usedcar_clean, aes(x = car_age, y = price_in_usd)) +
+  geom_line(stat = "summary", fun = "mean", color = "blue", size = 1) +
+  theme_minimal() +
+  ggtitle("Average Price (USD) vs Car Age") +
+  xlab("Car Age") +
+  ylab("Average Price (USD)") +
+  scale_y_continuous(labels = scales::comma)
+
+#Scatterplot
+# A scatterplot visualizes the relationship between car age and selling price.
+#Points are colored by ownership type (owner), making it easier to identify trends within each category.
+# Note: Updated to use `selling_price_usd`
+ggplot(usedcar_clean, aes(x = car_age, y = price_in_usd, color = owner)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "Car Age vs. Price (USD) by Owner", x = "Age of Car", y = "Price (USD)") +
+  theme_minimal()
+#Selling prices decrease as car age increases (negative correlation).
+#First-owner cars might have higher selling prices for a given age compared to multiple-owner cars.
+
+# Bar Graph: Price (USD) vs Mileage Bins
+# Create bins for Mileage
+usedcar_clean$mileage_bins <- cut(usedcar_clean$mileage, 
+                                  breaks = seq(0, max(usedcar_clean$mileage, na.rm = TRUE), by = 5), 
+                                  include.lowest = TRUE, 
+                                  labels = FALSE)
+
+# Aggregate Price (USD) by Mileage Bins
+mileage_summary <- usedcar_clean %>%
+  group_by(mileage_bins) %>%
+  summarize(avg_price = mean(price_in_usd, na.rm = TRUE))
+
+# Plot Bar Graph
+ggplot(mileage_summary, aes(x = as.factor(mileage_bins), y = avg_price)) +
+  geom_bar(stat = "identity", fill = "orange", alpha = 0.7) +
+  theme_minimal() +
+  ggtitle("Average Price (USD) by Mileage Bins") +
+  xlab("Mileage Bins (in 5 km/l increments)") +
+  ylab("Average Price (USD)") +
+  scale_y_continuous(labels = scales::comma) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# drop mileage_bins from the data since it's for visualization
+usedcar_clean <- usedcar_clean %>%
+  select(-mileage_bins)
+
+
+
+# Violin Plot: Price (USD) by Fuel Type
+ggplot(usedcar_clean, aes(x = fuel, y = price_in_usd, fill = fuel)) +
+  geom_violin(trim = FALSE, alpha = 0.7) +
+  theme_minimal() +
+  ggtitle("Distribution of Price (USD) by Fuel Type") +
+  xlab("Fuel Type") +
+  ylab("Price (USD)") +
+  scale_y_continuous(labels = scales::comma) +
+  scale_fill_brewer(palette = "Set2")
+
+# Boxplot for Price in USD by Fuel Type
+ggplot(usedcar_clean, aes(x = fuel, y = price_in_usd, fill = fuel)) +
+  geom_boxplot(outlier.color = "red", outlier.shape = 1) +  
+  scale_y_continuous(labels = comma) +  
+  theme_minimal() +
+  ggtitle("Price (USD) by Fuel Type") +
+  xlab("Fuel Type") +
+  ylab("Price (in USD)") +  
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  
+
+# Boxplot: compares selling prices (in USD) across ownership categories.
+# Note: Updated to use `price_in_usd`
+ggplot(usedcar_clean, aes(x = owner, y = price_in_usd)) +
+  geom_boxplot(fill = "lightcoral") +
+  labs(title = "Price (USD) vs. Owner", x = "Owner Type", y = "Price (USD)")
+#First-owner cars might have higher median selling prices, reflecting better condition.
+#Older cars (multiple owners) tend to have lower selling prices.
+
+# Scatter Plot: Price (USD) vs Max Power
+ggplot(usedcar_clean, aes(x = max_power, y = price_in_usd)) +
+  geom_point(alpha = 0.6, color = "blue") +
+  geom_smooth(method = "lm", color = "red", se = FALSE) + # Adding a linear regression line
+  theme_minimal() +
+  ggtitle("Price (USD) vs Max Power") +
+  xlab("Max Power ") +
+  ylab("Price (USD)") +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_continuous(labels = scales::comma)
+
+# Scatter Plot: Price (USD) vs Engine
+ggplot(usedcar_clean, aes(x = engine, y = price_in_usd)) +
+  geom_point(alpha = 0.6, color = "green") +
+  geom_smooth(method = "lm", color = "red", se = FALSE) + # Adding a linear regression line
+  theme_minimal() +
+  ggtitle("Price (USD) vs Engine") +
+  xlab("Engine") +
+  ylab("Price (USD)") +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_continuous(labels = scales::comma)
+
+# Boxplot: Price (USD) vs Transmission Type
+ggplot(usedcar_clean, aes(x = transmission, y = price_in_usd, fill = transmission)) +
+  geom_boxplot(alpha = 0.6) +
+  theme_minimal() +
+  ggtitle("Price (USD) vs Transmission Type") +
+  xlab("Transmission Type") +
+  ylab("Price (USD)") +
+  scale_y_continuous(labels = scales::comma) +
+  scale_fill_brewer(palette = "Set3")
+
+# Scatter Plot: Price (USD) vs Miles Drive
+ggplot(usedcar_clean, aes(x = miles_driven, y = price_in_usd)) +
+  geom_point(alpha = 0.6, color = "purple") +
+  geom_smooth(method = "lm", color = "red", se = FALSE) + # Adding a linear regression line
+  theme_minimal() +
+  ggtitle("Price (USD) vs Miles Driven") +
+  xlab("Miles Driven") +
+  ylab("Price (USD)") +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_continuous(labels = scales::comma)
+
+# Boxplot: Price (USD) Seller Type
+ggplot(usedcar_clean, aes(x = seller_type, y = price_in_usd, fill = seller_type)) +
+  geom_boxplot(alpha = 0.6) +
+  theme_minimal() +
+  ggtitle("Price (USD) Seller Type") +
+  xlab("Seller Type") +
+  ylab("Price (USD)") +
+  scale_y_continuous(labels = scales::comma) +
+  scale_fill_brewer(palette = "Set3")
+```
+
+**Relationships between other variables**
+```{r eda2, results="markup" }
+# Boxplot: Seats vs Owner Type
+ggplot(usedcar_clean, aes(x = owner, y = seats, color = owner)) +
+  geom_jitter(width = 0.2, alpha = 0.6) +
+  theme_minimal() +
+  ggtitle("Number of Seats by Owner Type") +
+  xlab("Owner Type") +
+  ylab("Number of Seats") +
+  scale_color_brewer(palette = "Set3")
+
+# Bar Plot: Count of Cars by Owner Type and Number of Seats
+ggplot(usedcar_clean, aes(x = factor(seats), fill = factor(owner))) +
+  geom_bar(position = "dodge") +
+  theme_minimal() +
+  ggtitle("Count of Cars by Owner Type and Number of Seats") +
+  xlab("Number of Seats") +
+  ylab("Count of Cars") +
+  scale_fill_brewer(palette = "Set3") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Boxplot: distribution of car ages across different ownership categories (owner).
+#The median, quartiles, and potential outliers are displayed for each ownership type.
+ggplot(usedcar_clean, aes(x = owner, y = car_age)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(title = "Car Age vs. Owner", x = "Owner Type", y = "Car Age")
+#First-owner cars might be relatively newer (lower age).
+#Cars with multiple previous owners might be older.
+
+
+# Boxplot: shows how mileage varies across ownership categories.
+ggplot(usedcar_clean, aes(x = owner, y = miles_driven)) +
+  geom_boxplot(fill = "lightgreen") +
+  labs(title = "Miles Driven vs. Owner", x = "Owner Type", y = "Miles Driven")
+#First-owner cars may have lower miles on average compared to cars with multiple owners.
+#High mileage for certain ownership types could suggest extensive prior usage.
+
+
+```
+
+
+## 2) Statistical Tests
+
+### A) Correlation Analysis (Numerical Features)
+```{r corr, results="markup" }
+
+# Select numerical columns for correlation analysis
+numerical_columns <- usedcar_clean[, sapply(usedcar_clean, is.numeric)]
+
+# Compute correlation matrix
+cor_matrix <- cor(numerical_columns, use = "complete.obs")
+
+# Visualize the correlation matrix
+corrplot(cor_matrix, 
+         method = "circle", 
+         type = "upper", 
+         tl.col = "black", 
+         tl.srt = 45, 
+         col = colorRampPalette(c("blue", "white", "red"))(200),  # Color palette
+         addCoef.col = "black")  # Add correlation coefficients on the plot
+```
+
+Based on Correlation Matrix, we could check strong relationship between engine & max_power, max_power & price_in_usd.
+The high correlation between year & car_age is because we created car_age from year.
+
+
+### B) Correlation Between Price and Each Numeric Variable
+We additionally calculated correlation between Price and Other Features for easy identification.
+```{r stat_test_num, results="markup" }
+
+# Select only numeric variables for correlation
+numeric_vars <- usedcar_clean %>%
+  dplyr::select(where(is.numeric))
+
+# Compute correlation matrix
+cor_matrix <- cor(numeric_vars, use = "complete.obs")
+
+# Extract correlation of price_in_usd with other variables
+cor_price_in_usd <- cor_matrix["price_in_usd", ]
+print(cor_price_in_usd)
+
+# Create a bar plot of correlations
+ggplot(data.frame(variable = names(cor_price_in_usd), 
+                  correlation = cor_price_in_usd), 
+       aes(x = reorder(variable, correlation), y = correlation)) +
+  geom_bar(stat = "identity", fill = "lightblue") +
+  theme_minimal() +
+  ggtitle("Correlation of Price (USD) with Other Variables") +
+  ylab("Correlation") +
+  xlab("Variable") +
+  coord_flip()  # Flips the axes for better readability
+
+```
+
+### C) Statistical Tests for Categorical Variables
+```{r stat_test_cat, results="markup" }
+# ANOVA test: Price_in_usd by Fuel Type
+anova_fuel <- aov(price_in_usd ~ fuel, data = usedcar_clean)
+summary(anova_fuel)
+
+# ANOVA test: Price_in_usd by Seller Type
+anova_seller_type <- aov(price_in_usd ~ seller_type, data = usedcar_clean)
+summary(anova_seller_type)
+
+# ANOVA test: Price_in_usd by Transmission Type
+anova_transmission <- aov(price_in_usd ~ transmission, data = usedcar_clean)
+summary(anova_transmission)
+
+# ANOVA test: Price_in_usd by Owner Type
+anova_owner <- aov(price_in_usd ~ owner, data = usedcar_clean)
+summary(anova_owner)
+
+# ANOVA test: Price_in_usd by Seats
+anova_seats <- aov(price_in_usd ~ seats, data = usedcar_clean)
+summary(anova_seats)
+
+# Post-hoc analysis for Fuel Type
+tukey_fuel <- TukeyHSD(anova_fuel)
+summary(tukey_fuel)
+
+# Pearson Correlation Test between price_in_usd and mileage
+cor_test_result <- cor.test(usedcar_clean$price_in_usd, usedcar_clean$mileage)
+print(cor_test_result)
+
+# Chi-Square Test for independence between fuel type and seller type
+chi_square_result <- chisq.test(table(usedcar_clean$fuel, usedcar_clean$seller_type))
+print(chi_square_result)
+
+# Chi-Square Test: Independence between Fuel Type and Seller Type
+chi_square_fuel_seller <- chisq.test(table(usedcar_clean$fuel, usedcar_clean$seller_type))
+print(chi_square_fuel_seller)
+
+# Chi-Square Test: Independence between Fuel Type and Transmission
+chi_square_fuel_transmission <- chisq.test(table(usedcar_clean$fuel, usedcar_clean$transmission))
+print(chi_square_fuel_transmission)
+```
+
+The ANOVA results suggest that the categorical variables fuel, seller_type, transmission, owner, seats are all highly significant predictors of the price_in_usd variable. The post-hoc test shows which fuel types have higher or lower prices and helps people to group cars for different buyers.The weak negative correlation means cars with higher mileage usually cost a bit less which helps in setting fair prices.The Chi-square tests show links between fuel type, seller type, and transmission giving ideas about what buyers might prefer.
+
+
+# 3. Modeling and Evaluation
+
+## 1) SMART QUESTION 1: 
+**How can we develop a predictive model to forecast used car prices, and which features are most effective in predicting these prices?**
+
+### Step1) Data Preprocessing(continued)
+
+#### A. Remove unnecessary column
+Since name contains 1,982 unique car names, it will not be useful for predictive modeling in its current form and could increase the complexity of the model unnecessarilly. We decided to drop the `name` for the modeling first smart question. Also, we dropped `year` since we will use `car_age` for this model.
+```{r drop_name, results="markup"}
+# Create new data usedcar_final for modeling
+usedcar_final <- usedcar_clean
+
+# Get the total count of unique car names
+unique_names_count <- n_distinct(usedcar_final$name)
+cat("unique names count:", unique_names_count, "\n")
+
+# Drop 'name' and 'year' columns from usedcar_final
+usedcar_final <- subset(usedcar_final, select = -c(name, year))
+
+# Check current structure of the data
+str(usedcar_final)
+
+cat("\n","Count of Missing Values in Usedcar_final")
+colSums(is.na(usedcar_final))
+```
+
+Now, the `usedcar_final` data has 7,906 observation with 11 variables.
+
+
+#### B. Split the data into train and test sets
+
+We split the data into train/test(80:20) dataset.
+```{r split_data1, results="markup"  }
+set.seed(42)
+trainIndex <- createDataPartition(usedcar_final$price_in_usd, p = 0.8, list = FALSE)
+train_data1 <- usedcar_final[trainIndex, ]
+test_data1 <- usedcar_final[-trainIndex, ]
+
+# first few rows from train_data
+head(train_data1, 5)
+
+# Count the number of rows in the training set
+train_rows <- nrow(train_data1)
+cat("Number of rows in the train set: ", train_rows, "\n")
+
+# first few rows from test_data
+head(test_data1, 5)
+
+
+# Count the number of rows in the test set
+test_rows <- nrow(test_data1)
+cat("Number of rows in the test set: ", test_rows, "\n")
+
+```
+
+We have 6,327 rows of train, 1,579 rows of test set.
+
+### Step2) Initial Modeling: Linear Regression, Random Forest
+
+We first tried building models with full variables.
+```{r sm1_modelevalf, results="hide"  }
+# Define the model evaluation function before building model
+evaluate_model <- function(model, data, target_col, data_type) {
+  
+  # Make predictions using the model
+  pred <- predict(model, newdata = data)
+  
+  # Get actual target values
+  actual <- data[[target_col]]
+  
+  # Calculate evaluation metrics
+  mae <- mean(abs(pred - actual))
+  mse <- mean((pred - actual)^2)
+  rmse <- sqrt(mse)
+  rsq <- 1 - sum((pred - actual)^2) / sum((actual - mean(actual))^2)
+  
+  # Adjusted R-squared (for linear models, Random Forest will ignore this)
+  adj_rsq <- 1 - ((1 - rsq) * (nrow(data) - 1)) / (nrow(data) - length(coef(model)) - 1)
+  
+  # Plotting
+  par(mfrow=c(2,2))  # Arrange 2x2 plots
+  
+  model_name <- class(model)[1]  # Extract model name for the title, removing ".formula" if present
+  if (grepl(".formula", model_name)) {
+    model_name <- gsub(".formula", "", model_name)
+  }
+  
+  # Actual vs Predicted Plot
+  plot(actual, pred, main=paste(model_name, "-", data_type, "- Actual vs Predicted"), 
+       xlab="Actual", ylab="Predicted", col=ifelse(data_type == "Train", "blue", "green"))
+  abline(0, 1, col="red", lwd=2)
+  
+  # Residuals vs Predicted Plot
+  residuals <- actual - pred
+  plot(pred, residuals, main=paste(model_name, "-", data_type, "- Residuals vs Predicted"), 
+       xlab="Predicted", ylab="Residuals", col=ifelse(data_type == "Train", "blue", "green"))
+  abline(h=0, col="red", lwd=2)
+  
+  # Histogram of Residuals
+  hist(residuals, main=paste(model_name, "-", data_type, "- Histogram of Residuals"), 
+       xlab="Residuals", col="gray", breaks=30)
+  
+  # Boxplot of Residuals
+  boxplot(residuals, main=paste(model_name, "-", data_type, "- Boxplot of Residuals"), col="purple")
+  
+  # Return a data frame with evaluation metrics
+  return(data.frame(Model = model_name, MAE = mae, MSE = mse, RMSE = rmse, 
+                    R_squared = rsq, Adjusted_R_squared = adj_rsq))
+}
+```
+
+#### A. Linear Regression
+```{r sm1_lm, results="markup"  }
+# Model 1: Linear Regression
+lm_model <- lm(price_in_usd ~ ., data = train_data1)
+lm_pred <- predict(lm_model, newdata = test_data1)
+
+# Checking VIF
+cat("VIF of Full Linear Model","\n")
+vif(lm_model)
+
+# Evaluate the Linear Regression Model for training data
+lm_results_train <- evaluate_model(lm_model, train_data1, target_col = "price_in_usd", data_type = "Train")
+
+# Evaluate the Linear Regression Model for test data
+lm_results_test <- evaluate_model(lm_model, test_data1, target_col = "price_in_usd", data_type = "Test")
+
+
+```
+
+The VIF values suggest there’s no significant multicollinearity in the predictors.
+
+
+#### B. Random Forest
+Next, we ran Raodom Forest Model.
+```{r sm1_rf, results="markup"  }
+rf_model <- randomForest(price_in_usd ~ ., data = train_data1)
+rf_pred <- predict(rf_model, newdata = test_data1)
+
+# Evaluate the Random Forest Model for training data
+rf_results_train <- evaluate_model(rf_model, train_data1, target_col = "price_in_usd", data_type = "Train" )
+
+# Evaluate the Random Forest Model for test data
+rf_results_test <- evaluate_model(rf_model, test_data1, target_col = "price_in_usd" ,  data_type = "Test")
+```
+
+**The Feature Importance of Random Forest Model**
+```{r sm1_featureimportancef, results="markup"  }
+# Function to extract and plot feature importance from a Random Forest model
+evaluate_feature_importance <- function(rf_model, model_name = "Random Forest") {
+  # Extract feature importance from the Random Forest model
+  rf_importance <- importance(rf_model)
+  
+  # Get the importance values (first column) and feature names (row names)
+  importance_values <- rf_importance[, 1]
+  feature_names <- rownames(rf_importance)
+  
+  # Order features by importance (in descending order)
+  ordered_indices <- order(importance_values, decreasing = TRUE)
+  ordered_rf_importance <- importance_values[ordered_indices]
+  ordered_feature_names <- feature_names[ordered_indices]
+  
+  # Print the ordered feature importance
+  cat("Ordered Feature Importance for", model_name, ":\n")
+  print(data.frame(Feature = ordered_feature_names, Importance = ordered_rf_importance))
+
+  # Divide the importance values by 1 billion for easier readability (in billions)
+  ordered_rf_importance_in_billions <- ordered_rf_importance / 1e9
+  
+  # Plot the Feature Importance (now divided by billion)
+  barplot(ordered_rf_importance_in_billions,
+          names.arg = ordered_feature_names,
+          main = paste(model_name, "- Feature Importance (in billions)"),
+          col = "blue",
+          las = 2,  # Rotate axis labels for better readability
+          cex.names = 0.9,  # Adjust size of feature names on x-axis
+          cex.axis = 0.9,  # Adjust size of y-axis labels
+          border = NA,  # Remove borders for a cleaner look
+          ylim = c(0, max(ordered_rf_importance_in_billions) * 1.1))  # Add some space above bars
+}
+```
+
+```{r sm1_featureimportance, results="markup"  }
+# Evaluate Feature Importance for random forest model
+evaluate_feature_importance(rf_model, model_name = "Random Forest Model")
+```
+
+Feature Importance:The most important features are `max power, engine, transmission, and car age`. Some features, like `fuel, seats and owner`, have a lower impact.
+
+
+### Step3) Model Evaluation and Comparision for Initial model
+In this part, we evaluated and compared the initial model that we created using `Linear Regression` and `R`andom Forest` models.
+#### Compare Results of Both Models
+```{r sm1_initcom, results="markup" }
+# Combine both evaluation results for Linear Regression and Random Forest (for both train and test)
+results_train <- rbind(lm_results_train, rf_results_train)
+results_test <- rbind(lm_results_test, rf_results_test)
+
+# Print the comparison tables
+cat("Training Data Evaluation Results for both models:\n")
+print(results_train)
+
+cat("\nTest Data Evaluation Results for both models:\n")
+print(results_test)
+
+```
+
+#### Additional validation for Linear Model (Cross Validation)
+
+```{r sm1_cross, results="markup" }
+# k-fold cross-validation
+# Set up the train control for k-fold cross-validation
+train_control <- trainControl(method = "cv", number = 5)  # 5-fold cross-validation
+
+# Fit the linear regression model with cross-validation using full dataset
+lm_cv_model <- train(price_in_usd ~ ., 
+                     data = usedcar_final,  
+                     method = "lm", 
+                     trControl = train_control)
+
+# Summary of the cross-validation results
+print(lm_cv_model)
+```
+
+We also did `Cross Validation` and R^2 value is similar as the one we evaluated in the previous step.
+
+
+#### Model Summary
+The Random Forest model significantly outperforms Linear Regression in both training and test sets.
+
+**Linear Regression(lm):** 
+
+[Training Data]
+
+MAE: 3,181 USD — The model's average prediction error is about 3,181 USD, meaning it's off by this amount on average.
+
+RMSE: 5,226 USD — The root mean squared error suggests that, on average, the model's predictions deviate by 5,226 USD from the actual prices.
+
+R²: 0.693 — The model explains 69.3% of the variance in car prices, indicating a relatively strong but not perfect fit.
+
+[Test Data]
+
+MAE: 3,300 USD — The prediction error is slightly higher on the test set, with an average deviation of 3,300 USD.
+
+RMSE: 5,617 USD — The RMSE on the test data is also slightly higher, showing that the model's predictions are somewhat less accurate on unseen data.
+
+R²: 0.701 — The model improves slightly in explaining the variance in the test set, capturing 70.1% of the variance.
+
+
+[Cross-validation]
+
+R² = 0.694, suggests taht the model is performing reasonably well, with stable performance across both training and test datasets.
+
+
+**Random Forest:**
+
+[Training Data]
+
+MAE: 497 USD — The Random Forest model has a significantly smaller average error of 497 USD compared to Linear Regression, indicating higher accuracy.
+
+RMSE: 909 USD — The RMSE suggests that the predictions deviate by about 909 USD, showing excellent fit on the training data.
+
+R²: 0.991 — The Random Forest model explains 99.1% of the variance in car prices, reflecting an almost perfect fit on the training set.
+
+[Test Data]
+
+MAE: 884 USD — The model's performance is still excellent on the test data, with a relatively small average error of 884 USD.
+
+RMSE: 2,376 USD — Although the RMSE is higher on the test set, it is still much lower than that of Linear Regression, indicating better generalization.
+
+R²: 0.947 — The model continues to explain 94.7% of the variance in car prices on unseen data, showing very strong predictive performance.
+
+
+### Step4) Model Improvement for Linear Regression model
+For improving the Linear Regrssion model, we tried 3 methods(Feature Selection, Interaction Terms, One-Hot Encoding)
+And We concluded that Feature Selection for reducding model complexity is reasonable to consider.
+
+#### Method 1 Reduced Model(Feature Selection)  
+
+**Best Subset Selection using `regsubsets`**
+```{r sm1_subset, results="markup"}
+reg.best2 <- regsubsets(price_in_usd ~ ., data = train_data1, nbest = 1, method = "exhaustive")
+
+# Plot the Adjusted R^2 for different subsets
+plot(reg.best2, scale = "adjr2", main = "Adjusted R^2 vs. Number of Predictors")
+
+```
+
+Based on result above, we tried simpler model with `seller_type + transmission + max_power + seats + car_age` as predictors.
+
+**Reduced Linear Regression Model Evaluation**
+```{r sm1_subsetmodel, results="markup"}
+# Fit the linear regression model with selected predictors
+lm_selected <- lm(price_in_usd ~ seller_type + transmission + max_power + seats + car_age, data = train_data1)
+
+# Evaluate the model on the test set
+lm_pred_selected <- predict(lm_selected, newdata = test_data1)
+
+# Checking VIF
+cat("VIF of Reduced Linear Model","\n")
+vif(lm_selected ) 
+
+# Evaluate the Linear Regression Model for training data
+lm_selected_results_train <- evaluate_model(lm_selected, train_data1, target_col = "price_in_usd", data_type = "Train")
+
+# Evaluate the Linear Regression Model for test data
+lm_selected_results_test <- evaluate_model(lm_selected, test_data1, target_col = "price_in_usd", data_type = "Test")
+
+# Combine both evaluation results for reduced Linear Regression(for both train and test)
+results_selected_lm_model <- rbind(lm_selected_results_train, lm_selected_results_test)
+
+# Print the comparison tables
+cat("Evaluation Results for selected Linear Model Train/Test:\n")
+print(results_selected_lm_model)
+
+
+```
+
+We got similar result with full Linear Model with low VIF values.
+
+**Additional validation for Linear Model (Cross Validation)**
+
+```{r sm1_cross_red, results="markup" }
+# k-fold cross-validation
+# Set up the train control for k-fold cross-validation
+train_control <- trainControl(method = "cv", number = 5)  # 5-fold cross-validation
+
+# Fit the linear regression model with cross-validation using full dataset
+lm_cv_model2 <- train(price_in_usd ~ seller_type + transmission + max_power + seats + car_age, 
+                     data = usedcar_final,  
+                     method = "lm", 
+                     trControl = train_control)
+
+# Summary of the cross-validation results
+print(lm_cv_model2)
+```
+
+Even result of cross validation was similar as full model(0.694). 
+
+The fact that the best subset model has similar performance to the full model suggests that the reduced model with only the selected features is performing nearly as well as the full model on both the training and test datasets. For the simpler model, we can choose `seller_type + transmission + max_power + seats + car_age` as predictors.
+
+
+##### Method 2 Model with interaction terms
+**Checking Correlations**
+```{r sm1_corr, results="markup"}
+cor_matrix <- cor(train_data1[, c("mileage", "car_age", "max_power", "engine", "miles_driven")])
+print(cor_matrix)
+```
+
+Based on correlation matrix, we tried add interaction terms in the model.
+
+Engine × Max Power: The strong positive correlation (0.709) between engine size and max power suggests that these two variables are highly related.
+
+Engine × Mileage: The moderate negative correlation between engine size and mileage (-0.583) might suggest that cars with larger engines tend to have higher mileage.
+
+Car Age × Miles Driven: The moderate positive correlation between car age and miles driven (0.456) indicates that older cars tend to be driven more.
+
+**Linear Model with interaction terms**
+```{r sm1_interaction1, results="markup"}
+lm_model_interaction1 <- lm(price_in_usd ~ fuel + seller_type + transmission + owner + 
+                             engine * mileage + engine * max_power + seats + miles_driven + car_age * miles_driven, 
+                            data = train_data1)
+
+summary(lm_model_interaction1)
+
+cat("VIF of Linear Model with Interaction Terms 1 \n")
+vif(lm_model_interaction1)
+```
+
+The R-squared value increased, but there are significant multicollinearity after applying interaction terms.
+We decided drop interaction terms and keep only one, and tried the model again.
+
+```{r sm1_interaction2, results="markup"}
+lm_model_interaction2 <- lm(price_in_usd ~ fuel + seller_type + transmission + owner + 
+                             engine + max_power + mileage + seats + miles_driven + car_age * miles_driven, 
+                            data = train_data1)
+
+summary(lm_model_interaction2)
+
+
+cat("VIF of Linear Model with Interaction Terms 2 \n")
+vif(lm_model_interaction2)
+```
+
+Both trials have high VIF results for some predictors, so we decided not to use interaction terms to improve the model.
+
+
+##### Method 3 One Hot Encoding and Scaling the categorical variables
+We performed one-hot encoding and scaling on the entire dataset (usedcar_final) before splitting it into train_data1 and test_data1. The reason for this approach is that if we were to apply one-hot encoding to the data after splitting, certain categorical variables could be unevenly distributed between the training and test sets. This would lead to imbalanced feature representations, where some categories might appear only in one set and not the other. As a result, models like Random Forest, which rely on all levels of categorical variables, would not be able to properly train and test on such data. By encoding and scaling the entire dataset first, we ensure that both the training and test sets have consistent feature representations.
+
+```{r sm1_encoding, results="markup"}
+# One-hot encode and scale the full dataset (usedcar_final)
+# One-hot encode categorical variables
+usedcar_final_encoded <- model.matrix(~ fuel + seller_type + transmission + owner + seats - 1, data = usedcar_final)
+
+# Convert to data frame
+usedcar_final_encoded <- as.data.frame(usedcar_final_encoded)
+
+# Add the target variable 'price_in_usd' back to the encoded data
+usedcar_final_encoded$price_in_usd <- usedcar_final$price_in_usd
+
+# Define the numerical features for scaling
+num_features <- c("mileage", "engine", "max_power", "miles_driven", "car_age")
+
+# Scale the numerical features
+usedcar_final_encoded[num_features] <- scale(usedcar_final[num_features])
+
+# Split the dataset into training and test sets
+# Set seed for reproducibility
+set.seed(123)
+
+# Split data into train and test sets (80% training, 20% testing)
+train_index <- sample(1:nrow(usedcar_final_encoded), 0.8 * nrow(usedcar_final_encoded))
+
+# Create the training set
+train_data_encoded <- usedcar_final_encoded[train_index, ]
+
+# Create the test set
+test_data_encoded <- usedcar_final_encoded[-train_index, ]
+
+# check the train/test dataset
+cat("Train set with one-hot encoding \n")
+str(train_data_encoded)
+
+cat("Test set with one-hot encoding  \n")
+str(test_data_encoded)
+```
+
+```{r sm1_encodedlm, results="markup"}
+# Linear Regression Model
+lm_model_encoded <- lm(price_in_usd ~ ., data = train_data_encoded)
+lm_pred_encoded <- predict(lm_model_encoded , newdata = test_data_encoded)
+
+# Checking VIF
+# vif(lm_model_encoded ) # get error due to there are aliased coefficients in the model after one hot encoding.
+
+# Evaluate the Linear Regression Model for training data
+lm_encoded_results_train <- evaluate_model(lm_model_encoded, train_data_encoded, target_col = "price_in_usd", data_type = "Train")
+
+# Evaluate the Linear Regression Model for test data
+lm_encoded_results_test <- evaluate_model(lm_model_encoded, test_data_encoded, target_col = "price_in_usd", data_type = "Test")
+
+# Combine both evaluation results for reduced Linear Regression(for both train and test)
+results_encoded_lm_model <- rbind(lm_encoded_results_train, lm_encoded_results_test)
+
+# Print the comparison tables
+cat("Evaluation Results for encoded Linear Model Train/Test:\n")
+print(results_encoded_lm_model)
+
+
+
+```
+
+The linear model did not show significant improvement after applying one-hot encoding. In fact, one-hot encoding increased the complexity of the process without providing substantial benefits.
+
+
+## 2) SMART QUESTION 2: 
+**What is the likelihood of a car being sold by its first owner based on its age, miles_driven, and price?**
+
+### Step 1) Data Preprocessing
+
+#### A. Create a New Column for modeling
+Creating binary column for first_owner and subset only the necessary columns for modeling.
+```{r sm2_binaryformat, results="markup"}
+data <- usedcar_final # copy preprocessed data from previous step
+#Creating a binary column first_owner, where:
+#1: The car is being sold by its first owner.
+#0: The car is not being sold by its first owner.
+data$first_owner <- ifelse(data$owner == "First Owner", 1, 0)
+
+str(data)
+```
+
+This simplifies the ownership data into a binary format, suitable for classification.
+
+```{r sm2_modeling, results="markup"}
+# Retaining only the necessary columns for modeling.
+data <- data[, c("car_age", "miles_driven", "price_in_usd", "first_owner")]
+
+str(data)
+```
+
+The dataset is reduced to the columns:car_age,miles_driven,price_in_usd,first_owner
+
+#### B. Splitting train/test data
+For this modeling, we splitted 70% train(5,535 rows) and 30% test(2,371 rows).
+```{r sm2_training, results="markup"}
+#Spliting the dataset into:
+#Training Set (70%): Used for building the model.
+#Testing Set (30%): Used for evaluating the model's performance.
+set.seed(42)
+train_index <- createDataPartition(data$first_owner, p = 0.7, list = FALSE)
+train_data <- data[train_index, ]
+test_data <- data[-train_index, ]
+
+# first few rows from train_data
+head(train_data, 5)
+
+# Count the number of rows in the training set
+train_rows_cnt <- nrow(train_data)
+cat("Number of rows in the train set: ", train_rows_cnt , "\n")
+
+# first few rows from test_data
+head(test_data, 5)
+
+
+# Count the number of rows in the test set
+test_rows_cnt  <- nrow(test_data)
+cat("Number of rows in the test set: ", test_rows_cnt , "\n")
+```
+
+### Step 2) Modeling and Evaluation
+
+#### A. Logistic Regression
+```{r sm2_lgm, results="markup"}
+#Training a logistic regression model to predict first_owner using:
+#car_age
+#miles_driven
+#price_in_usd
+logistic_model <- glm(first_owner ~ car_age + miles_driven + price_in_usd, 
+                      data = train_data, 
+                      family = binomial)
+
+```
+
+The model computes coefficients for each feature, determining their impact on the probability of a car being a first-owner sale.
+
+**Model Evaluation: Logistic Regression**
+```{r sm2_predicition, results="markup"}
+#Generating predictions for the test set.
+logistic_preds <- predict(logistic_model, newdata = test_data, type = "response")
+#Converting probabilities (type = "response") into binary predictions (threshold: 0.5).
+logistic_preds <- ifelse(logistic_preds > 0.5, 1, 0)
+#Calculating accuracy by comparing predictions to actual values.
+logistic_accuracy <- mean(logistic_preds == test_data$first_owner)
+#The logistic_accuracy variable stores the accuracy of the logistic regression model
+
+# Confusion Matrix for logistic regression
+logistic_cm <- confusionMatrix(as.factor(logistic_preds), as.factor(test_data$first_owner))
+print(logistic_cm)
+
+# ROC Curve for logistic regression
+logistic_roc <- roc(test_data$first_owner, logistic_preds)
+ggroc(logistic_roc) + 
+  ggtitle("ROC Curve - Logistic Regression") + 
+  theme_minimal()
+
+# Precision-Recall Curve for Logistic Regression
+pr_curve_logistic <- pr.curve(scores.class0 = logistic_preds[test_data$first_owner == 0], 
+                              scores.class1 = logistic_preds[test_data$first_owner == 1], 
+                              curve = TRUE)
+
+# Plot Precision-Recall Curve for Logistic Regression
+plot(pr_curve_logistic, main = "Precision-Recall Curve - Logistic Regression", col = "blue")
+```
+
+The Accuracy of Logistic Regression is 75.7%. The specificity (87.5%) is high, indicating the model is very good at identifying negative cases (class 0). However, the AUC of 0.253 in the Precision-Recall curve is a sign that the Logistic Regression model needs improvement.
+
+```{r sm2_dtm, results="markup"}
+#Training a decision tree to classify first_owner using the same features.
+tree_model <- rpart(first_owner ~ car_age + miles_driven + price_in_usd, 
+                    data = train_data, 
+                    method = "class")
+#The decision tree model uses a rule-based approach, splitting data based on conditions (e.g., car_age < 5).
+```
+
+
+```{r sm2_dtmvisualization, results="markup"}
+#Creating a visualization of the decision tree.
+rpart.plot(tree_model, type = 4, extra = 101, fallen.leaves = TRUE,
+           main = "Decision Tree for First Owner Prediction")
+#The tree shows:
+#Root nodes: Initial splits based on the most significant features.
+#Leaf nodes: Final predictions with class proportions.
+```
+
+**Model Evaluation:  Decision Tree**
+```{r sm2_testset_acc, results="markup"}
+#Predicting the class for the test set.
+#Calculating accuracy by comparing predictions to actual values.
+tree_preds <- predict(tree_model, newdata = test_data, type = "class")
+tree_accuracy <- mean(tree_preds == test_data$first_owner)
+#The tree_accuracy variable stores the decision tree's accuracy. 
+
+# Printing the decision tree accuracy.
+cat("Decision Tree Accuracy (with USD):", tree_accuracy, "\n") 
+#The decision tree accuracy is slightly higher than the logistic regression accuracy.
+
+# Confusion Matrix for decision tree
+tree_cm <- confusionMatrix(as.factor(tree_preds), as.factor(test_data$first_owner))
+print(tree_cm)
+
+# ROC Curve for decision tree
+tree_probs <- predict(tree_model, newdata = test_data, type = "prob")[,2]  # Probability of class 1
+tree_roc <- roc(test_data$first_owner, tree_probs)
+ggroc(tree_roc) + 
+  ggtitle("ROC Curve - Decision Tree") + 
+  theme_minimal()
+
+# Feature Importance from Decision Tree
+tree_importance <- data.frame(Feature = names(tree_model$variable.importance),
+                              Importance = tree_model$variable.importance)
+tree_importance <- tree_importance[order(tree_importance$Importance, decreasing = TRUE), ]
+
+# Plot feature importance for Decision Tree
+ggplot(tree_importance, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Feature Importance - Decision Tree", x = "Feature", y = "Importance") +
+  theme_minimal()
+```
+
+The model has an accuracy of 76.6%, which is relatively good, but the sensitivity (62.8%) indicates that the model misses a significant portion of the positive cases. On the other hand, the model has high specificity (83.8%), meaning it’s very reliable at identifying negative cases.
+
+Decision Tree seems to perform a little better overall, as it has higher balanced accuracy.
+According to the feature importance of decision tree,car_age is the most important feature for this decision tree model.
+
+
+## 3) SMART QUESTION 3: 
+**Can we predict whether a car has exceeded 60,000 miles driven based on its age and engine specifications?**
+```{r sm3, results="markup" }
+# Data Preparation
+# Convert year to age and use existing miles_driven column
+current_year <- as.numeric(format(Sys.Date(), "%Y"))
+car_data <- usedcar_clean %>%
+  mutate(
+    age = current_year - year,
+    exceeded_60k = ifelse(miles_driven > 60000, 1, 0)  # Use miles_driven directly
+  )
+
+
+
+# Logistic Regression Model
+set.seed(123)
+train_index <- createDataPartition(car_data$exceeded_60k, p = 0.8, list = FALSE)
+train_data <- car_data[train_index, ]
+test_data <- car_data[-train_index, ]
+
+model <- glm(exceeded_60k ~ age + mileage + engine + max_power, 
+             data = train_data, 
+             family = binomial)
+
+# Model Summary
+summary(model)
+
+# Prediction and Model Evaluation
+predictions <- predict(model, newdata = test_data, type = "response")
+test_data <- test_data %>%
+  mutate(predicted = ifelse(predictions > 0.5, 1, 0))
+
+conf_matrix <- confusionMatrix(as.factor(test_data$predicted), as.factor(test_data$exceeded_60k))
+conf_matrix
+
+
+```
+
+```{r sm3_eval, results="markup" }
+# ROC Curve
+roc_curve <- roc(test_data$exceeded_60k, predictions)
+ggroc(roc_curve) + 
+  ggtitle("ROC Curve") +
+  theme_minimal()
+
+# Precision-Recall Curve
+pr_curve <- pr.curve(scores.class0 = predictions[test_data$exceeded_60k == 0], 
+                     scores.class1 = predictions[test_data$exceeded_60k == 1], 
+                     curve = TRUE)
+
+# Plot Precision-Recall Curve
+plot(pr_curve, main = "Precision-Recall Curve", col = "blue")
+
+# Confusion Matrix Heatmap
+cm_matrix <- confusionMatrix(as.factor(test_data$predicted), as.factor(test_data$exceeded_60k))
+cm_data <- as.data.frame(cm_matrix$table)
+
+ggplot(cm_data, aes(x = Reference, y = Prediction, fill = Freq)) + 
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "blue") +
+  labs(title = "Confusion Matrix Heatmap", x = "True Labels", y = "Predicted Labels") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+While the model achieves a reasonable overall accuracy, its ability to correctly identify cars that have exceeded 60,000 miles (specificity = 0.265) is quite low. This indicates a potential bias in the model, possibly due to class imbalance (most cars are below 60,000 miles).
+The high sensitivity (0.932) suggests the model excels at identifying cars that have not exceeded the threshold, but the low specificity limits its usefulness in real-world applications where correctly identifying higher mileage cars is critical.
+In the ROC curve shown above, the performance of the model seems to be not so high in sensitivity, showing a gradual incline rather than a sharp high performance. The precision recall graph shows an AUC score of 0.603, meaning that the model shows poor performance level in predicting new data and requires further improvments.
+
+
+# 4. Conclusion
+
+**SMART Question Q1:**
+
+We determined that Random Forest was better model for predicting used car prices compared to Linear Regression Model. It outperformed Linear Regression by effectively capturing complex, non-linear relationships between the predictors. The top five most influential features identified by Random Forest were: maximum power, engine size, transmission type, car age, and miles_driven.
+
+**SMART Question Q2:**
+
+The likelihood of a car being sold by its first owner is influenced by car age, miles_driven, and selling price. Through our analysis, we compared Logistic Regression and Decision Tree models. Both models demonstrated good predictive accuracy, but the Decision Tree model is better for this task due to its interpretability and ability to identify clear thresholds for key factors like age, miles_driven, and selling price (in USD). For example, first-owner cars are generally newer, driven fewer kilometers, and sold at higher prices. Thus, the Decision Tree is the best model for identifying first-owner cars effectively and intuitively.
+
+**SMART Question 3:** 
+
+The data modeling part highlighted the predictive power of logistic regression in addressing Question 3. While the model showed strong performance in identifying cars under 60,000 miles, its lower specificity suggests room for improvement in predicting high-miles_driven cars. This opens the door for future refinements, such as experimenting with additional features or advanced machine learning models.
+
+**Overall Conclusion:**
+
+In conclusion, our analysis has provided valuable insights into the factors influencing used car prices, ownership history, and miles_driven. The Random Forest model emerged as the most effective in predicting used car prices, while the Decision Tree model excelled in identifying first-owner cars. Logistic regression proved to be a reliable tool for predicting cars with lower miles_driven. However, further refinement is necessary to enhance its accuracy in identifying high-mileage vehicles.
+
+These findings can be leveraged to inform pricing strategies, target specific customer segments, and optimize inventory management for used car dealerships.
