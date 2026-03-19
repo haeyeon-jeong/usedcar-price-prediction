@@ -112,8 +112,20 @@ This project demonstrates how machine learning can effectively predict used car 
 
 ## How to Run
 
-1. Open the `.Rmd` file in RStudio with the dataset(cardekho.csv)
-2. Install required libraries:
+### Option 1: View Results (Recommended)
+
+- Open the provided `.html` file to view the full analysis without running any code  
+- This includes all visualizations, models, and results  
+
+---
+
+### Option 2: Run the Code
+
+1. Ensure the dataset (`cardekho.csv`) is in your working directory  
+
+2. Open the `.Rmd` file in RStudio  
+
+3. Install required libraries:
 
 ```r
 install.packages(c("dplyr", "ggplot2", "caret", "rpart", "rpart.plot", "randomForest", "e1071"))
